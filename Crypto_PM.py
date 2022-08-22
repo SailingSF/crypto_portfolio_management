@@ -44,8 +44,11 @@ def alpha_calc(portfolio, benchmark, rf=0.0):
     annualizes returns
     '''
 
-    #making sure portfolio and benchmark are the same size
+    #making sure portfolio and benchmark are the same size, and have a daily index
+    daily_index = pd.date_range(start=portfolio.index.min(), end=portfolio.index.max())
+    portfolio = portfolio.reindex(daily_index).fillna(method='ffill')
     length = len(portfolio)
+    benchmark = benchmark.reindex(portfolio.index).fillna(method='ffill').dropna()
     
     if length > len(benchmark):
         length = len(benchmark)
