@@ -1,29 +1,30 @@
 import numpy as np
 import pandas as pd
 
-def sharpe_portfolio(portfolio, rfr):
+def sharpe_portfolio(portfolio, rfr = 0.0):
     '''
     Takes a pandas series of prices from a portfolio and the risk free return (rfr) and returns the sharpe ratio
     Sharpe ratio is defined as return over the standard deviation of returns
     '''
-    #returns and ratio are not annualized, will give sharpe for entire series
-    
-    returns = (portfolio.iloc[-1]-portfolio.iloc[0])/portfolio.iloc[0]
-    std = portfolio.pct_change().std()
+    #returns and ratio are annualized, will give sharpe for entire series
+    length = len(portfolio)
+
+    returns = (1+((portfolio.iloc[-1]-portfolio.iloc[0])/portfolio.iloc[0]))**(365/length)-1
+    std = portfolio.pct_change().std()*np.sqrt(365)
     
     return (returns-rfr)/std
 
-def sortino_portfolio(portfolio, target):
+def sortino_portfolio(portfolio, target = 0.0):
     '''
     Takes a pandas series of prices from a portfolio and a target rate of return (often the risk free rate) and returns the Sortino Ratio
     The Sortino Ratio takes downside standard deviation as its risk parameter, only penalizing downward moves
     '''
-    #returns and ratio are not annualized, will give Sortino for entire series
-
+    #returns and ratio are annualized, will give Sortino for entire series
+    length = len(portfolio)
     returns = portfolio.pct_change()
-    return_f = (portfolio.iloc[-1]-portfolio.iloc[0])/portfolio.iloc[0]
+    return_f = (1+((portfolio.iloc[-1]-portfolio.iloc[0])/portfolio.iloc[0]))**(365/length)-1
     down_returns = returns.where(returns<target).dropna()
-    risk = down_returns.std()
+    risk = down_returns.std()*np.sqrt(365)
     
     return (return_f - target)/risk
 
@@ -34,7 +35,7 @@ def beta_calc(portfolio, benchmark):
     '''
     covariance = portfolio.pct_change().cov(benchmark.pct_change())
     
-    return covariance/benchmark.pct_change().var()
+    return covariance/(benchmark.pct_change().var())
 
 def alpha_calc(portfolio, benchmark, rf=0.0):
     '''
