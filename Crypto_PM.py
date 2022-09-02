@@ -114,10 +114,10 @@ def yield_value(prices, apy):
     
     return df['yield']
 
-def lp_value(prices, invest, apy):
+def lp_stable_value(prices, invest, apy):
     '''
     takes token prices, amount invested, and the quoted yield in apy
-    returns values of the lp position for token and stable pair
+    returns values of the lp position for token and STABLE pair
     also returns comparisons for impermanent loss calculation
     '''
     
@@ -142,6 +142,34 @@ def lp_value(prices, invest, apy):
     
     return df
 
+def lp_tokens_value(prices0, prices1, invest, apy):
+    '''
+    takes two token prices, amount invested, and the quoted yield in apy
+    returns values of the lp position for token/token pair
+    also returns comparisons for impermanent loss calculation
+    '''
+    
+    price_enter0 = prices0.iloc[0]
+    price_enter1 = prices1.iloc[0]
+    
+    k = ((invest/2)/price_enter1)*((invest/2)/price_enter0) #amount of tokens entered with
+    ratio = prices0/prices1 #ratio as tokens0 to tokens1
+    
+    tokens0 = (k/ratio)**(1/2)
+    tokens1 = (k*ratio)**(1/2)
+    
+    lp_value = tokens0*prices0+tokens1*prices1
+    lp_value.name = None
+    
+    hodl = (invest/2/price_enter0)*prices0 + (invest/2/price_enter1)*prices1
+    
+    df = pd.DataFrame(lp_value, columns=['lp_value'])
+    df['lp_value_yield'] = yield_value(df['lp_value'], apy)*invest
+    
+    df['hodl'] = hodl
+    
+    return df
+
 def token_lp_portfolio(prices, ratio, apy, invest = 1000):
     '''
     Takes pandas series of token prices and a ratio of portfolio in LP with a stable coin, the APY, and an investment amount
@@ -150,7 +178,7 @@ def token_lp_portfolio(prices, ratio, apy, invest = 1000):
     
     token_invest = invest*(1-ratio)
     lp_invest = invest*ratio
-    lp = lp_value(prices, lp_invest, apy)['lp_value_yield']
+    lp = lp_stable_value(prices, lp_invest, apy)['lp_value_yield']
     portfolio = ((prices/prices.iloc[0])*token_invest) + lp
     
     return portfolio
