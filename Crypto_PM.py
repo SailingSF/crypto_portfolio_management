@@ -182,3 +182,102 @@ def token_lp_portfolio(prices, ratio, apy, invest = 1000):
     portfolio = ((prices/prices.iloc[0])*token_invest) + lp
     
     return portfolio
+
+def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
+    '''
+    Function to take the inputs and prices serieses of two assets in a UNI V3 LP position
+    Outputs historical value of this position with a given static fee APY
+    Inputs are prices series of two assets with a common counter asset(USD/EUR/etc.) and outputs value in same counter asset
+    '''
+    #getting price of 0 in terms of 1, if using USD equivalent passing a price series of np.ones(len(prices0)) is suggested
+    ratio = prices0/prices1
+    
+    if ratio.iloc[0] >= tick_l and ratio.iloc[0] <= tick_h:
+        
+        #setting dummy amount of 0 to find liquidity mix
+        amount0 = 1
+        L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
+        amount1 = L * (np.sqrt(ratio.iloc[0]) - np.sqrt(tick_l))
+        
+        #get percentage mix based on Liquidity of X (0) value.
+        mix0 = amount0*prices0.iloc[0]/(amount0*prices0.iloc[0] + amount1*prices1.iloc[0])
+        value0 = mix0*invest
+        value1 = (1-mix0)*invest
+        
+        amount0 = value0/prices0.iloc[0]
+        amount1 = value1/prices1.iloc[0]
+        
+        #getting liquidity based on 0 asset. Assuming Lx == Ly here.
+        L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
+        #L used to estimate values of assets 0 and 1 when price is in range
+
+    elif ratio.iloc[0] < tick_l:
+
+        #case when current price is below minimum tick value so we are single sided in asset0
+        amount0 = invest/prices0.iloc[0]
+        amount1 = 0
+        
+        L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
+        print(amount0)
+    elif ratio.iloc[0] > tick_h:
+
+        #case when current price is above maximum tick value so we are single sided in asset1
+        amount1 = invest/prices1.iloc[0]
+        amount0 = 0
+        
+        L = amount1 / (np.sqrt(ratio.iloc[0]) - np.sqrt(tick_l))
+        print(amount1)
+    else:
+        #for debugging
+        print("something weird happened")
+        print(ratio) 
+    
+    
+    def amount0_in_pool(L, price0, price1, tick_l, tick_h):
+        #gets an amount in pool for the lambda expression later, optimized for pandas
+        ratio = price0/price1
+
+        if ratio > tick_h:
+            amount0 = 0
+        else:
+            amount0 = L*(np.sqrt(tick_h) - np.sqrt(ratio)) / (np.sqrt(ratio) * np.sqrt(tick_h))
+
+        return amount0
+
+    def amount1_in_pool(L, price0, price1, tick_l, tick_h):
+        #gets an amount in pool for the lambda expression later, optimized for pandas
+        ratio = price0/price1
+        if ratio < tick_l:
+            amount1 = 0
+        else:
+            amount1 =  L*(np.sqrt(ratio) - np.sqrt(tick_l))
+
+        return amount1
+    
+    #make price dataframe for use in lambda
+    df_price = pd.concat([prices0.rename('prices0'), prices1.rename('prices1')], axis=1)
+    df = pd.DataFrame()
+    
+    #use of lambda to get amounts in assets 0 and 1
+    df['asset0_amount'] = df_price.apply(lambda x: amount0_in_pool(L, x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
+    df['asset1_amount'] = df_price.apply(lambda x: amount1_in_pool(L, x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
+    
+    #value of each invidivual asset
+    df['asset0_value'] = df['asset0_amount'] * df_price['prices0']
+    df['asset1_value'] = df['asset1_amount'] * df_price['prices1']
+    
+    #value of pool only, no fees
+    df['pool_value'] = df['asset0_value'] + df['asset1_value']
+    
+    #apply yield only when in range
+    daily_rate = (apy+1)**(1/365)-1 #get daily rate from annualized APY
+    df['daily_fees'] = df.apply(lambda x: daily_rate*x['pool_value'] if (x['asset0_amount'] > 0) and (x['asset1_amount'] > 0) else 0, axis=1)
+    
+    #total value as pool value plus fees accumulated to that point
+    df['total_value'] = df['pool_value'] + df['daily_fees'].cumsum()
+    
+    #create hodl value for IL calculation and comparison
+    #normalize prices and do 50/50 split between the two. Possibly compare to what actual initial mix was?
+    df['hodl'] = (invest/2)*(prices0/prices0.iloc[0]) + (invest/2)*(prices1/prices1.iloc[0])
+    
+    return df
