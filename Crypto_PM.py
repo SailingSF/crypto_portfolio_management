@@ -210,27 +210,37 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
         #getting liquidity based on 0 asset. Assuming Lx == Ly here.
         L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
         #L used to estimate values of assets 0 and 1 when price is in range
-
+        amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
+        amount0_max = L / (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
+        
     elif ratio.iloc[0] < tick_l:
 
         #case when current price is below minimum tick value so we are single sided in asset0
         amount0 = invest/prices0.iloc[0]
         amount1 = 0
         
-        L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
-        print(amount0)
+        L = amount0 * np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l))
+        amount0_max = amount0
+        amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
+    
     elif ratio.iloc[0] > tick_h:
 
         #case when current price is above maximum tick value so we are single sided in asset1
         amount1 = invest/prices1.iloc[0]
         amount0 = 0
         
-        L = amount1 / (np.sqrt(ratio.iloc[0]) - np.sqrt(tick_l))
-        print(amount1)
+        L = amount1 / (np.sqrt(tick_h) - np.sqrt(tick_l))
+        
+        amount1_max = amount1
+        amount0_max = L / (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
     else:
         #for debugging
         print("something weird happened")
         print(ratio) 
+    
+    #getting maximum amounts
+#     amount0_max =  L /  (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
+#     amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
     
     
     def amount0_in_pool(L, price0, price1, tick_l, tick_h):
@@ -239,6 +249,8 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
 
         if ratio > tick_h:
             amount0 = 0
+        elif ratio < tick_l:
+            amount0 = amount0_max
         else:
             amount0 = L*(np.sqrt(tick_h) - np.sqrt(ratio)) / (np.sqrt(ratio) * np.sqrt(tick_h))
 
@@ -247,8 +259,11 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
     def amount1_in_pool(L, price0, price1, tick_l, tick_h):
         #gets an amount in pool for the lambda expression later, optimized for pandas
         ratio = price0/price1
+        
         if ratio < tick_l:
             amount1 = 0
+        elif ratio > tick_h:
+            amount1 = amount1_max
         else:
             amount1 =  L*(np.sqrt(ratio) - np.sqrt(tick_l))
 
@@ -278,6 +293,8 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
     
     #create hodl value for IL calculation and comparison
     #normalize prices and do 50/50 split between the two. Possibly compare to what actual initial mix was?
-    df['hodl'] = (invest/2)*(prices0/prices0.iloc[0]) + (invest/2)*(prices1/prices1.iloc[0])
     
+    #df['hodl'] = (invest/2)*(prices0/prices0.iloc[0]) + (invest/2)*(prices1/prices1.iloc[0])
+    df['hodl'] = amount0*prices0 + amount1*prices1
+
     return df
