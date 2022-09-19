@@ -170,7 +170,7 @@ def lp_tokens_value(prices0, prices1, invest, apy):
     
     return df
 
-def token_lp_portfolio(prices, ratio, apy, invest = 1000):
+def token_stable_lp_portfolio(prices, ratio, apy, invest = 1000):
     '''
     Takes pandas series of token prices and a ratio of portfolio in LP with a stable coin, the APY, and an investment amount
     Returns the value of the given portfolio with the percentage in an LP combination
@@ -183,7 +183,7 @@ def token_lp_portfolio(prices, ratio, apy, invest = 1000):
     
     return portfolio
 
-def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
+def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
     '''
     Function to take the inputs and prices serieses of two assets in a UNI V3 LP position
     Outputs historical value of this position with a given static fee APY
@@ -238,10 +238,6 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
         print("something weird happened")
         print(ratio) 
     
-    #getting maximum amounts
-#     amount0_max =  L /  (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
-#     amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
-    
     
     def amount0_in_pool(L, price0, price1, tick_l, tick_h):
         #gets an amount in pool for the lambda expression later, optimized for pandas
@@ -285,16 +281,15 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apy):
     df['pool_value'] = df['asset0_value'] + df['asset1_value']
     
     #apply yield only when in range
-    daily_rate = (apy+1)**(1/365)-1 #get daily rate from annualized APY
+    daily_rate = apr/365
+    #(apy+1)**(1/365)-1 #get daily rate from annualized APY
     df['daily_fees'] = df.apply(lambda x: daily_rate*x['pool_value'] if (x['asset0_amount'] > 0) and (x['asset1_amount'] > 0) else 0, axis=1)
     
     #total value as pool value plus fees accumulated to that point
     df['total_value'] = df['pool_value'] + df['daily_fees'].cumsum()
     
     #create hodl value for IL calculation and comparison
-    #normalize prices and do 50/50 split between the two. Possibly compare to what actual initial mix was?
-    
-    #df['hodl'] = (invest/2)*(prices0/prices0.iloc[0]) + (invest/2)*(prices1/prices1.iloc[0])
+    #hodl value is straight purchase of assets in amounts from initial LP position
     df['hodl'] = amount0*prices0 + amount1*prices1
 
     return df
