@@ -183,7 +183,7 @@ def token_stable_lp_portfolio(prices, ratio, apy, invest = 1000):
     
     return portfolio
 
-def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
+def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr, reinvest: bool = False):
     '''
     Function to take the inputs and prices serieses of two assets in a UNI V3 LP position
     Outputs historical value of this position with a given static fee APY
@@ -209,9 +209,6 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
         
         #getting liquidity based on 0 asset. Assuming Lx == Ly here.
         L = amount0 * np.sqrt(ratio.iloc[0]) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio.iloc[0]))
-        #L used to estimate values of assets 0 and 1 when price is in range
-        amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
-        amount0_max = L / (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
         
     elif ratio.iloc[0] < tick_l:
 
@@ -220,8 +217,6 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
         amount1 = 0
         
         L = amount0 * np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l))
-        amount0_max = amount0
-        amount1_max = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
     
     elif ratio.iloc[0] > tick_h:
 
@@ -231,13 +226,23 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
         
         L = amount1 / (np.sqrt(tick_h) - np.sqrt(tick_l))
         
-        amount1_max = amount1
-        amount0_max = L / (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
     else:
         #for debugging
         print("something weird happened")
         print(ratio) 
     
+    def get_liquidity(amount0, amount1, ratio, tick_l, tick_h):
+        #getting accuracte liquidity for series
+        if ratio >= tick_l and ratio <= tick_h:
+            L0 = amount0 * np.sqrt(ratio) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(ratio))
+            L1 = amount1 / (np.sqrt(ratio) - np.sqrt(tick_l))
+            L = min(L0, L1)
+        elif ratio > tick_h:
+            L = amount1 / (np.sqrt(tick_h) - np.sqrt(tick_l))
+        elif ratio < tick_l:
+            L = amount0 * np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l))
+       
+        return L
     
     def amount0_in_pool(L, price0, price1, tick_l, tick_h):
         #gets an amount in pool for the lambda expression later, optimized for pandas
@@ -246,7 +251,7 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
         if ratio > tick_h:
             amount0 = 0
         elif ratio < tick_l:
-            amount0 = amount0_max
+            amount0 = L / (np.sqrt(tick_l) * np.sqrt(tick_h) / (np.sqrt(tick_h) - np.sqrt(tick_l)))
         else:
             amount0 = L*(np.sqrt(tick_h) - np.sqrt(ratio)) / (np.sqrt(ratio) * np.sqrt(tick_h))
 
@@ -259,7 +264,7 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
         if ratio < tick_l:
             amount1 = 0
         elif ratio > tick_h:
-            amount1 = amount1_max
+            amount1 = L * (np.sqrt(tick_h) - np.sqrt(tick_l))
         else:
             amount1 =  L*(np.sqrt(ratio) - np.sqrt(tick_l))
 
@@ -267,12 +272,15 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
     
     #make price dataframe for use in lambda
     df_price = pd.concat([prices0.rename('prices0'), prices1.rename('prices1')], axis=1)
-    df = pd.DataFrame()
+    df = pd.DataFrame(df_price)
     
     #use of lambda to get amounts in assets 0 and 1
     df['asset0_amount'] = df_price.apply(lambda x: amount0_in_pool(L, x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
     df['asset1_amount'] = df_price.apply(lambda x: amount1_in_pool(L, x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
     
+    df['price_ratio'] = df_price['prices0']/df_price['prices1']
+    
+    df['liquidity'] = df.apply(lambda x: get_liquidity(x['asset0_amount'], x['asset1_amount'], x['price_ratio'], tick_l, tick_h), axis=1)
     #value of each invidivual asset
     df['asset0_value'] = df['asset0_amount'] * df_price['prices0']
     df['asset1_value'] = df['asset1_amount'] * df_price['prices1']
@@ -281,15 +289,38 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr):
     df['pool_value'] = df['asset0_value'] + df['asset1_value']
     
     #apply yield only when in range
+    liq_mask = ((df['asset0_amount'] > 0) & (df['asset1_amount'] > 0))
     daily_rate = apr/365
-    #(apy+1)**(1/365)-1 #get daily rate from annualized APY
+    if reinvest:
+        #this is only daily reinvesting
+        df['rate'] = daily_rate
+        df['rate'] = df['rate'][liq_mask]
+        #liquidity grows by daily rate compounded daily, only when in range
+        df['compounded_liquidity'] = df['liquidity'][liq_mask] * (1+df['rate']).cumprod()
+        #when not in range liquidity doesn't change, should be filled with previous value
+        df['compounded_liquidity'] = df['compounded_liquidity'].fillna(method='ffill')
+        #for NaNs with no previous value fill with normal liquidity, this is for when position begins out of range
+        df['compounded_liquidity'] = df['compounded_liquidity'].fillna(df['liquidity'])
+        df['compounded_asset0_amount'] = df.apply(lambda x: amount0_in_pool(x['compounded_liquidity'], x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
+        df['compounded_asset1_amount'] = df.apply(lambda x: amount1_in_pool(x['compounded_liquidity'], x['prices0'], x['prices1'], tick_l, tick_h), axis=1)
+        df['compounded_pool_value'] = (df['compounded_asset0_amount']*df['prices0']) + (df['compounded_asset1_amount']*df['prices1'])
+       
+        #for comparing, finding the fee amount from every day, not used to calculate value
+        df['compound_daily_fees'] = df.apply(lambda x: daily_rate*x['compounded_pool_value'] if (x['asset0_amount'] > 0) and (x['asset1_amount'] > 0) else 0, axis=1)
+    else:
+        pass
+    
+    #non compounding daily fees
     df['daily_fees'] = df.apply(lambda x: daily_rate*x['pool_value'] if (x['asset0_amount'] > 0) and (x['asset1_amount'] > 0) else 0, axis=1)
-    
-    #total value as pool value plus fees accumulated to that point
+
+    #total value as pool value plus fees accumulated to that point, for non compounding
     df['total_value'] = df['pool_value'] + df['daily_fees'].cumsum()
-    
+
     #create hodl value for IL calculation and comparison
     #hodl value is straight purchase of assets in amounts from initial LP position
     df['hodl'] = amount0*prices0 + amount1*prices1
 
+    #cleaning unneeded columns
+    drop_columns = ['rate', 'prices0', 'prices1']
+    df = df.drop(drop_columns, axis=1)
     return df
