@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from scipy.stats import gaussian_kde
 
 def sharpe_portfolio(portfolio, rfr = 0.0):
     '''
@@ -37,7 +38,7 @@ def beta_calc(portfolio, benchmark):
     
     return covariance/(benchmark.pct_change().var())
 
-def alpha_calc(portfolio, benchmark, rf=0.0):
+def alpha_calc(portfolio, benchmark, rf=0.0, verbose: bool = True, return_all: bool = False):
     '''
     calculates Jensen Alpha based on:
     portfolio and benchmark, risk free rate of return: rf
@@ -65,13 +66,17 @@ def alpha_calc(portfolio, benchmark, rf=0.0):
     beta = beta_calc(portfolio, benchmark)
 
     #print statements for sanity check and verboseness
-    print(f"Portfolio return: {rp}")
-    print(f"Benchmark return: {rb}")
-    print(f"Porfolio Beta: {beta}")
+    if verbose:
+        print(f"Portfolio return: {rp}")
+        print(f"Benchmark return: {rb}")
+        print(f"Porfolio Beta: {beta}")
     
     alpha = rp - (rf + beta*(rb - rf))
     
-    return alpha
+    if return_all:
+        return alpha, beta, rp, rb
+    else:
+        return alpha
 
 def simple_forward_prices(start_price, desired_return, volatility, days=365, precision = 0.01):
     '''
@@ -95,6 +100,27 @@ def simple_forward_prices(start_price, desired_return, volatility, days=365, pre
 
     return prices
 
+def kde_forward_prices(start_price, desired_return, kde, days=365, precision=0.01):
+    '''
+    Function for creating a sample series of prices with a desired return.
+    This version uses KDE to sample returns.
+    The precision variable ensures the given return is not lost by randomness
+    '''
+    #get the final price as the starting price with the desired return
+    desired_price = start_price * (1 + desired_return)
+    loc = desired_return / days  # Location parameter (median) of distribution
+    #simulate to ensure outcome
+    for k in range(0, 1000):
+        # Sample returns from the fitted KDE
+        returns = kde.resample(days).flatten()
+        prices = (1 + returns).cumprod()
+        prices = prices / prices[0] * start_price
+        final_price = prices[-1]
+        #check if calculated final price is within given precision, if not, try again
+        if final_price >= desired_price * (1 - precision) and final_price <= desired_price * (1 + precision):
+            break
+    return prices
+
 def yield_value(prices, apy):
     '''
     Creates new pandas Series of prices given one series and an APY
@@ -114,7 +140,7 @@ def yield_value(prices, apy):
     
     return df['yield']
 
-def lp_stable_value(prices, invest, apy):
+def lp_stable_value(prices: pd.Series, invest, apy):
     '''
     takes token prices, amount invested, and the quoted yield in apy
     returns values of the lp position for token and STABLE pair
@@ -323,4 +349,35 @@ def uni_v3_lp(prices0, prices1, tick_l, tick_h, invest, apr, reinvest: bool = Fa
     #cleaning unneeded columns
     drop_columns = ['rate', 'prices0', 'prices1']
     df = df.drop(drop_columns, axis=1)
+    
     return df
+
+def monte_carlo_var_kde(start_value: float, kde: gaussian_kde, N: int, M: int = 10000) -> float:
+    """
+    start_value: The initial value of the portfolio
+    kde: Kernel Density Estimation of the 1-day returns from scipy.stats gaussian_kde
+    N: Time horizon in days
+    M: Number of Monte Carlo runs
+    stress_test_days: Days on which a stress event occurs
+    stress_factor: The magnitude of the stress event on the return
+    """
+    # Initialize an array to hold the portfolio values at the end of N days for each Monte Carlo run
+    final_values = np.zeros(M)
+    
+    # Loop for each Monte Carlo run
+    for i in range(M):
+        # Sample N-day returns based on KDE
+        daily_returns = kde.resample(N).flatten()/100
+        
+        # Calculate the portfolio value at the end of N days for this Monte Carlo run
+        portfolio_values = start_value * np.cumprod(1 + daily_returns)
+        final_values[i] = portfolio_values[-1]
+    
+    # Sort the final portfolio values to calculate VaR
+    final_sorted_values = np.sort(final_values)
+    
+    # 5% VaR is the value at the 5th percentile of the sorted final values
+    var_95 = np.percentile(final_sorted_values, 5)
+    var_95_percent = (1 - var_95/start_value)*100
+
+    return var_95_percent
